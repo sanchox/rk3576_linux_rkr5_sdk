@@ -296,7 +296,7 @@
 };
 
 &sdio {
-	max-frequency = <200000000>;
+	max-frequency = <100000000>;
 	no-sd;
 	no-mmc;
 	bus-width = <4>;
@@ -331,11 +331,11 @@
 };
 
 
-&usbdp_phy {
-	maximum-speed = "high-speed";
-	rockchip,dp-lane-mux = < 0 1 2 3 >;
-	status = "okay";
-};
+// &usbdp_phy {
+// 	maximum-speed = "high-speed";
+// 	rockchip,dp-lane-mux = < 0 1 2 3 >;
+// 	status = "okay";
+// };
 
 &usb_drd0_dwc3 {
 	phys = <&u2phy0_otg>;
