@@ -64,6 +64,7 @@ install_packages() {
 		ISP=rkaiq_rk3576
 		[ -e /usr/lib/aarch64-linux-gnu/ ] && tar xvf /rknpu2.tar -C /
 		[ -e /usr/lib/aarch64-linux-gnu/ ] && apt install -fy --allow-downgrades /camera_engine_$ISP*.deb
+        tar -xvf /camera-engine-rkaiq-1.0.tar
 		apt install -fy --allow-downgrades /libmali-*$MALI*-x11-wayland-gbm*.deb
 		;;
         rk3588|rk3588s)

@@ -199,6 +199,7 @@ find /usr/lib/systemd/ -name "wireplumber*.service" | xargs sed -i "/Environment
 cp /packages/libmali/libmali-*-x11*.deb /
 cp -rf /packages/rkisp/*.deb /
 cp -rf /packages/rkaiq/*.deb /
+cp -rf /packages/rkaiq/*.tar /
 cp -rf /usr/lib/firmware/rockchip/ /
 
 # reduce 500M size for rootfs
