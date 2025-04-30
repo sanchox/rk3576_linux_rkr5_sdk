@@ -157,6 +157,12 @@ echo -e "\033[36m move rknpu2.................... \033[0m"
 mv /packages/rknpu2/rknpu2.tar  /
 fi
 
+#------------------armsom-test------------
+echo -e "\033[36m Install armsom-test.................... \033[0m"
+apt-get install -y libqt5gui5=5.15.8+dfsg-11+deb12u2 qtmultimedia5-dev
+cp -rf /packages/armsom/*.deb /
+fi
+
 #------------------rktoolkit------------
 echo -e "\033[36m Install rktoolkit.................... \033[0m"
 \${APT_INSTALL} /packages/rktoolkit/*.deb

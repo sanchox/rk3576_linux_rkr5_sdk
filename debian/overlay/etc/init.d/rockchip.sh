@@ -119,6 +119,12 @@ esac
 compatible="${compatible#rockchip,}"
 boardname="${compatible%%rockchip,*}"
 
+if [ "$boardname" == "armsom,sige5" ]; then
+    apt install -fy --allow-downgrades /armsom-test_sige5_1.0.2_arm64.deb
+elif [ "$boardname" == "armsom,cm5-io" ]; then
+    apt install -fy --allow-downgrades /armsom-test_cm5io_1.0.2_arm64.deb
+fi
+
 # first boot configure
 if [ ! -e "/usr/local/first_boot_flag" ]; then
     echo "It's the first time booting. The rootfs will be configured."
