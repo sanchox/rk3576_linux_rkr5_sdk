@@ -25,6 +25,7 @@
 #include <linux/version.h>
 #include <linux/rk-camera-module.h>
 #include <linux/rk-preisp.h>
+#include <linux/pinctrl/consumer.h>
 
 #include <media/v4l2-async.h>
 #include <media/media-entity.h>
@@ -84,6 +85,7 @@
 #define GC2093_LANES		2
 
 #define OF_CAMERA_HDR_MODE		"rockchip,camera-hdr-mode"
+#define OF_CAMERA_PINCTRL_STATE_DEFAULT	"rockchip,camera_default"
 
 static const char * const gc2093_supply_names[] = {
 	"dovdd",    /* Digital I/O power */
@@ -129,6 +131,9 @@ struct gc2093 {
 	struct gpio_desc *reset_gpio;
 	struct gpio_desc *pwdn_gpio;
 	struct regulator_bulk_data supplies[GC2093_NUM_SUPPLIES];
+
+	struct pinctrl		*pinctrl;
+	struct pinctrl_state	*pins_default;
 
 	struct v4l2_subdev  subdev;
 	struct media_pad    pad;
@@ -881,6 +886,13 @@ static int __gc2093_power_on(struct gc2093 *gc2093)
 {
 	int ret;
 	struct device *dev = gc2093->dev;
+
+	if (!IS_ERR_OR_NULL(gc2093->pins_default)) {
+		ret = pinctrl_select_state(gc2093->pinctrl,
+					   gc2093->pins_default);
+		if (ret < 0)
+			dev_err(dev, "could not set pins\n");
+	}
 
 	ret = clk_set_rate(gc2093->xvclk, GC2093_XVCLK_FREQ);
 	if (ret < 0)
@@ -1739,6 +1751,15 @@ static int gc2093_probe(struct i2c_client *client,
 	if (ret) {
 		dev_err(dev, "Failed to get regulators\n");
 		return ret;
+	}
+
+	gc2093->pinctrl = devm_pinctrl_get(dev);
+	if (!IS_ERR(gc2093->pinctrl)) {
+		gc2093->pins_default =
+			pinctrl_lookup_state(gc2093->pinctrl,
+					     OF_CAMERA_PINCTRL_STATE_DEFAULT);
+		if (IS_ERR(gc2093->pins_default))
+			dev_err(dev, "could not get default pinstate\n");
 	}
 
 	mutex_init(&gc2093->lock);
