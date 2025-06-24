@@ -18805,7 +18805,6 @@ int dhd_ioctl_entry_local(struct net_device *net, wl_ioctl_t *ioc, int cmd)
 	int ifidx;
 	int ret = 0;
 	dhd_info_t *dhd = NULL;
-
 	if (!net || !DEV_PRIV(net)) {
 		DHD_ERROR(("%s invalid parameter net %p dev_priv %p\n",
 			__FUNCTION__, net, DEV_PRIV(net)));
