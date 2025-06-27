@@ -8342,11 +8342,16 @@ void rkcif_stream_init(struct rkcif_device *dev, u32 id)
 	memset(&stream->sensor_exp_info, 0, sizeof(stream->sensor_exp_info));
 }
 
-static int rkcif_sensor_set_power(struct rkcif_stream *stream, int on)
+int rkcif_sensor_set_power(struct rkcif_stream *stream, int on)
 {
 	struct rkcif_device *cif_dev = stream->cifdev;
 	struct sditf_priv *priv = cif_dev->sditf[0];
 	int i = 0;
+
+	if (!on && atomic_dec_if_positive(&cif_dev->sd_power_cnt))
+		return 0;
+	if (on && atomic_inc_return(&cif_dev->sd_power_cnt) > 1)
+		return 0;
 
 	if (cif_dev->terminal_sensor.sd)
 		v4l2_subdev_call(cif_dev->terminal_sensor.sd,
@@ -8413,11 +8418,11 @@ static int rkcif_fh_open(struct file *filp)
 		ret = v4l2_pipeline_pm_get(&vnode->vdev.entity);
 		v4l2_dbg(1, rkcif_debug, vdev, "open video, entity use_count %d\n",
 			 vnode->vdev.entity.use_count);
+		ret = rkcif_sensor_set_power(stream, on);
 		mutex_unlock(&cifdev->stream_lock);
 		if (ret < 0)
 			vb2_fop_release(filp);
 	}
-	ret = rkcif_sensor_set_power(stream, on);
 	return ret;
 }
 
