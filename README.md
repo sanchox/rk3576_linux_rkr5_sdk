@@ -51,15 +51,26 @@ Compile the Kernel:
 ./build.sh kernel
 ```
 
-
-
 run `./build.sh` system will compile the buildroot system by default
 
 rootfs can be specified by setting the environment variable `RK_SOOTFSYSTEM`.
-If you need to build root, you can generate it using the following command:
+If you need to build rootfs, you can generate it using the following command:
 
 ```
 export RK_ROOTFS_SYSTEM=debian
 export RK_ROOTFS_SYSTEM=buildroot
 ```
 
+The generated image is stored in the `rockdev` directory
+
+### 3.Online upgrade system
+
+Put the compiled image into the board and execute the corresponding dd instruction to upgrade the kernel and uboot
+
+```
+##kernel updating
+dd conv=fsync,notrunc if=/data/app/boot.img of=/dev/disk/by-partlabel/boot
+
+##uboot updating
+dd conv=fsync,notrunc if=/data/app/uboot/uboot.img of=/dev/disk/by-partlabel/uboot
+```
