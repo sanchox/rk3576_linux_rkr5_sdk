@@ -26,67 +26,138 @@ void _chk_btc_err(struct btc_t *btc, u8 type, u32 cnt)
 	struct btc_dm *dm = &btc->dm;
 	struct btc_wl_info *wl = &cx->wl;
 	struct btc_bt_info *bt = &cx->bt;
+	struct btc_bt_a2dp_desc *a2dp = &bt->link_info.a2dp_desc;
+	struct fbtc_cysta *pcysta = NULL;
+	u32 empty_streak = 0, empty_streak_max = 0;
+	u32 slot_pair, c_begin, c_end, cycle, s_id;
+
+	if (wl->status.map.lps == BTC_LPS_RF_OFF ||
+	    wl->status.map.rf_off)
+		return;
 
 	switch (type) {
-	case BTC_DCNT_RPT_FREEZE:
-		if (wl->status.map.lps == BTC_LPS_RF_OFF ||
-		    wl->status.map.rf_off)
-			return;
-
+	case BTC_DCNT_RPT_HANG:
 		if (dm->cnt_dm[BTC_DCNT_RPT] == cnt && btc->fwinfo.rpt_en_map)
-			dm->cnt_dm[BTC_DCNT_RPT_FREEZE]++;
+			dm->cnt_dm[BTC_DCNT_RPT_HANG]++;
 		else
-			dm->cnt_dm[BTC_DCNT_RPT_FREEZE] = 0;
+			dm->cnt_dm[BTC_DCNT_RPT_HANG] = 0;
 
-		if (dm->cnt_dm[BTC_DCNT_RPT_FREEZE] >= BTC_CHK_HANG_MAX)
-			dm->error.map.wl_fw_hang = true;
+		if (dm->cnt_dm[BTC_DCNT_RPT_HANG] >= BTC_CHK_HANG_MAX)
+			dm->error |= BTC_DMERR_WL_FW_HANG;
 		else
-			dm->error.map.wl_fw_hang = false;
+			dm->error &= ~BTC_DMERR_WL_FW_HANG;
 
 		dm->cnt_dm[BTC_DCNT_RPT] = cnt;
 		break;
-	case BTC_DCNT_CYCLE_FREEZE:
+	case BTC_DCNT_BT_SLOT_FLOOD:
+		if (!btc->fwinfo.rpt_fbtc_cysta.cinfo.valid ||
+		    dm->cnt_dm[BTC_DCNT_CYCLE] == cnt)
+		    return;
+
+		if (cnt < BTC_CYCLE_SLOT_MAX || /* exclude old array data */
+		    (dm->tdma_now.type != CXTDMA_AUTO &&
+		     dm->tdma_now.type != CXTDMA_AUTO2 &&
+		     dm->tdma_now.ext_ctrl != CXECTL_EXT)) {
+			dm->error &= ~BTC_DMERR_BT_SLOT_FLOOD;
+			dm->cnt_dm[BTC_DCNT_BT_SLOT_FLOOD] = 0;
+			a2dp->no_empty_streak_2s = 0;
+			a2dp->no_empty_streak_max = 0;
+			return;
+		}
+
+		/* 1 cycle = 1 wl-slot + 1 bt-slot */
+		slot_pair = BTC_CYCLE_SLOT_MAX/2;
+
+		/* dm->cnt_dm[BTC_DCNT_CYCLE] --> last cycles */
+		if (cnt - dm->cnt_dm[BTC_DCNT_CYCLE] > slot_pair)
+			c_begin = cnt - slot_pair + 1;
+		else
+			c_begin = dm->cnt_dm[BTC_DCNT_CYCLE] + 1;
+
+		c_end = cnt;
+		pcysta = &btc->fwinfo.rpt_fbtc_cysta.finfo;
+
+		for (cycle = c_begin; cycle <= c_end; cycle++) {
+			s_id = ((cycle-1) % slot_pair)*2;
+
+			if (pcysta->slot_step_time[s_id] >= dm->bt_slot_flood)
+				dm->cnt_dm[BTC_DCNT_BT_SLOT_FLOOD]++;
+
+			/* calculate no-A2DP-empty streak count */
+			if (pcysta->a2dp_trx[s_id].empty_cnt == 0 &&
+			    pcysta->a2dp_trx[s_id+1].empty_cnt == 0) {
+				empty_streak++;
+				if (empty_streak > empty_streak_max)
+					empty_streak_max = empty_streak;
+			} else {
+				empty_streak = 0;
+			}
+		}
+
+		a2dp->no_empty_streak_2s = empty_streak_max;
+
+		if (a2dp->no_empty_streak_2s > a2dp->no_empty_streak_max)
+			a2dp->no_empty_streak_max = a2dp->no_empty_streak_2s;
+
+		if (dm->cnt_dm[BTC_DCNT_BT_SLOT_FLOOD])
+			dm->error |= BTC_DMERR_BT_SLOT_FLOOD;
+		break;
+	case BTC_DCNT_CYCLE_HANG:
 		if (dm->cnt_dm[BTC_DCNT_CYCLE] == cnt &&
 		    (dm->tdma_now.type != CXTDMA_OFF ||
 		     dm->tdma_now.ext_ctrl == CXECTL_EXT))
-			dm->cnt_dm[BTC_DCNT_CYCLE_FREEZE]++;
+			dm->cnt_dm[BTC_DCNT_CYCLE_HANG]++;
 		else
-			dm->cnt_dm[BTC_DCNT_CYCLE_FREEZE] = 0;
+			dm->cnt_dm[BTC_DCNT_CYCLE_HANG] = 0;
 
-		if (dm->cnt_dm[BTC_DCNT_CYCLE_FREEZE] >= BTC_CHK_HANG_MAX)
-			dm->error.map.cycle_hang = true;
+		if (dm->cnt_dm[BTC_DCNT_CYCLE_HANG] >= BTC_CHK_HANG_MAX)
+			dm->error |= BTC_DMERR_CYCLE_HANG;
 		else
-			dm->error.map.cycle_hang = false;
+			dm->error &= ~BTC_DMERR_CYCLE_HANG;
 
 		dm->cnt_dm[BTC_DCNT_CYCLE] = cnt;
 		break;
-	case BTC_DCNT_W1_FREEZE:
+	case BTC_DCNT_W1_HANG:
 		if (dm->cnt_dm[BTC_DCNT_W1] == cnt &&
 		    dm->tdma_now.type != CXTDMA_OFF)
-			dm->cnt_dm[BTC_DCNT_W1_FREEZE]++;
+			dm->cnt_dm[BTC_DCNT_W1_HANG]++;
 		else
-			dm->cnt_dm[BTC_DCNT_W1_FREEZE] = 0;
+			dm->cnt_dm[BTC_DCNT_W1_HANG] = 0;
 
-		if (dm->cnt_dm[BTC_DCNT_W1_FREEZE] >= BTC_CHK_HANG_MAX)
-			dm->error.map.w1_hang = true;
+		if (dm->cnt_dm[BTC_DCNT_W1_HANG] >= BTC_CHK_HANG_MAX)
+			dm->error |= BTC_DMERR_W1_HANG;
 		else
-			dm->error.map.w1_hang = false;
+			dm->error &= ~BTC_DMERR_W1_HANG;
 
 		dm->cnt_dm[BTC_DCNT_W1] = cnt;
 		break;
-	case BTC_DCNT_B1_FREEZE:
+	case BTC_DCNT_B1_HANG:
 		if (dm->cnt_dm[BTC_DCNT_B1] == cnt &&
 		    dm->tdma_now.type != CXTDMA_OFF)
-			dm->cnt_dm[BTC_DCNT_B1_FREEZE]++;
+			dm->cnt_dm[BTC_DCNT_B1_HANG]++;
 		else
-			dm->cnt_dm[BTC_DCNT_B1_FREEZE] = 0;
+			dm->cnt_dm[BTC_DCNT_B1_HANG] = 0;
 
-		if (dm->cnt_dm[BTC_DCNT_B1_FREEZE] >= BTC_CHK_HANG_MAX)
-			dm->error.map.b1_hang = true;
+		if (dm->cnt_dm[BTC_DCNT_B1_HANG] >= BTC_CHK_HANG_MAX)
+			dm->error |= BTC_DMERR_B1_HANG;
 		else
-			dm->error.map.b1_hang = false;
+			dm->error &= ~BTC_DMERR_B1_HANG;
 
 		dm->cnt_dm[BTC_DCNT_B1] = cnt;
+		break;
+	case BTC_DCNT_E2G_HANG:
+		if (dm->cnt_dm[BTC_DCNT_E2G] == cnt &&
+		    dm->tdma_now.ext_ctrl == CXECTL_EXT)
+			dm->cnt_dm[BTC_DCNT_E2G_HANG]++;
+		else
+			dm->cnt_dm[BTC_DCNT_E2G_HANG] = 0;
+
+		if (dm->cnt_dm[BTC_DCNT_E2G_HANG] >= BTC_CHK_HANG_MAX)
+			dm->error |= BTC_DMERR_E2G_HANG;
+		else
+			dm->error &= ~BTC_DMERR_E2G_HANG;
+
+		dm->cnt_dm[BTC_DCNT_E2G] = cnt;
 		break;
 	case BTC_DCNT_TDMA_NONSYNC:
 		if (cnt != 0) /* if tdma not sync between drv/fw  */
@@ -95,9 +166,9 @@ void _chk_btc_err(struct btc_t *btc, u8 type, u32 cnt)
 			dm->cnt_dm[BTC_DCNT_TDMA_NONSYNC] = 0;
 
 		if (dm->cnt_dm[BTC_DCNT_TDMA_NONSYNC] >= BTC_CHK_HANG_MAX)
-			dm->error.map.tdma_no_sync = true;
+			dm->error |= BTC_DMERR_TDMA_NO_SYNC;
 		else
-			dm->error.map.tdma_no_sync = false;
+			dm->error &= ~BTC_DMERR_TDMA_NO_SYNC;
 		break;
 	case BTC_DCNT_SLOT_NONSYNC:
 		if (cnt != 0) /* if slot not sync between drv/fw  */
@@ -106,25 +177,20 @@ void _chk_btc_err(struct btc_t *btc, u8 type, u32 cnt)
 			dm->cnt_dm[BTC_DCNT_SLOT_NONSYNC] = 0;
 
 		if (dm->cnt_dm[BTC_DCNT_SLOT_NONSYNC] >= BTC_CHK_HANG_MAX)
-			dm->error.map.tdma_no_sync = true;
+			dm->error |= BTC_DMERR_SLOT_NO_SYNC;
 		else
-			dm->error.map.tdma_no_sync = false;
+			dm->error &= ~BTC_DMERR_SLOT_NO_SYNC;
 		break;
-	case BTC_DCNT_BTCNT_FREEZE:
+	case BTC_DCNT_BTCNT_HANG:
 		cnt = cx->cnt_bt[BTC_BCNT_HIPRI_RX] +
 		      cx->cnt_bt[BTC_BCNT_HIPRI_TX] +
 		      cx->cnt_bt[BTC_BCNT_LOPRI_RX] +
 		      cx->cnt_bt[BTC_BCNT_LOPRI_TX];
 
 		if (cnt == 0)
-			dm->cnt_dm[BTC_DCNT_BTCNT_FREEZE]++;
+			dm->cnt_dm[BTC_DCNT_BTCNT_HANG]++;
 		else
-			dm->cnt_dm[BTC_DCNT_BTCNT_FREEZE] = 0;
-
-		if ((dm->cnt_dm[BTC_DCNT_BTCNT_FREEZE] >= BTC_CHK_HANG_MAX &&
-		     bt->enable.now) || (!dm->cnt_dm[BTC_DCNT_BTCNT_FREEZE] &&
-		     !bt->enable.now))
-			_update_bt_scbd(btc, false);
+			dm->cnt_dm[BTC_DCNT_BTCNT_HANG] = 0;
 		break;
 	case BTC_DCNT_WL_SLOT_DRIFT:
 		if (cnt >= BTC_CHK_WLSLOT_DRIFT_MAX)
@@ -133,9 +199,9 @@ void _chk_btc_err(struct btc_t *btc, u8 type, u32 cnt)
 			dm->cnt_dm[BTC_DCNT_WL_SLOT_DRIFT] = 0;
 
 		if (dm->cnt_dm[BTC_DCNT_WL_SLOT_DRIFT] >= BTC_CHK_HANG_MAX)
-			dm->error.map.wl_slot_drift = true;
+			dm->error |= BTC_DMERR_WL_SLOT_DRIFT;
 		else
-			dm->error.map.wl_slot_drift = false;
+			dm->error &= ~BTC_DMERR_WL_SLOT_DRIFT;
 		break;
 	case BTC_DCNT_BT_SLOT_DRIFT:
 		if (cnt >= BTC_CHK_BTSLOT_DRIFT_MAX)
@@ -144,9 +210,10 @@ void _chk_btc_err(struct btc_t *btc, u8 type, u32 cnt)
 			dm->cnt_dm[BTC_DCNT_BT_SLOT_DRIFT] = 0;
 
 		if (dm->cnt_dm[BTC_DCNT_BT_SLOT_DRIFT] >= BTC_CHK_HANG_MAX)
-			dm->error.map.bt_slot_drift = true;
+			dm->error |= BTC_DMERR_BT_SLOT_DRIFT;
 		else
-			dm->error.map.bt_slot_drift = false;
+			dm->error &= ~BTC_DMERR_BT_SLOT_DRIFT;
+
 		break;
 	}
 }
@@ -154,28 +221,104 @@ void _chk_btc_err(struct btc_t *btc, u8 type, u32 cnt)
 static void _update_bt_report(struct btc_t *btc, u8 rpt_type, u8* pfinfo)
 {
 	struct rtw_hal_com_t *h = btc->hal;
-	struct btc_bt_info *bt = &btc->cx.bt;
-	struct btc_bt_link_info *bt_linfo = &bt->link_info;
-	struct btc_bt_a2dp_desc *a2dp = &bt_linfo->a2dp_desc;
+	struct btc_cx *cx = &btc->cx;
+	struct btc_dm *dm = &btc->dm;
+	struct btc_wl_info *wl = &cx->wl;
+	struct btc_bt_info *bt = &cx->bt;
+	struct btc_bt_link_info *b = &bt->link_info;
+	struct btc_bt_a2dp_desc *a2dp = &b->a2dp_desc;
 
 	struct fbtc_btver* pver = (struct fbtc_btver*) pfinfo;
 	struct fbtc_btscan* pscan = (struct fbtc_btscan*) pfinfo;
 	struct fbtc_btafh* pafh = (struct fbtc_btafh*) pfinfo;
 	struct fbtc_btdevinfo* pdev = (struct fbtc_btdevinfo*) pfinfo;
+	u8 i, j, xmap, scan_update;
+	u32 cnt = 0, cnt_le = 0;
 
 	switch (rpt_type) {
 	case BTC_RPT_TYPE_BT_VER:
 		bt->ver_info.fw = pver->fw_ver;
 		bt->ver_info.fw_coex = (pver->coex_ver & bMASKB0);
 		bt->feature = pver->feature;
+
+		if (bt->ver_info.fw_coex != btc->chip->btcx_desired) {
+			bt->fw_ver_mismatch = 1;
+			dm->error |= BTC_DMERR_BT_VER_MISMATCH;
+		} else {
+			bt->fw_ver_mismatch = 0;
+			dm->error &= ~BTC_DMERR_BT_VER_MISMATCH;
+		}
 		break;
 	case BTC_RPT_TYPE_BT_SCAN:
-		hal_mem_cpy(h, bt->scan_info, pscan->scan, BTC_SCAN_MAX1);
+		scan_update = 1;
+		for(i = CXSCAN_BG; i < CXSCAN_MAX1; i++) {
+			hal_mem_cpy(h, &bt->scan_info[i], &pscan->para[i], 4);
+			if ((pscan->type & BIT(i)) &&
+			     pscan->para[i].win == 0 &&
+			     pscan->para[i].intvl == 0)
+			     scan_update = 0;
+		}
+
+		if (scan_update)
+			bt->scan_info_update = 1;
 		break;
 	case BTC_RPT_TYPE_BT_AFH:
-		hal_mem_cpy(h, &bt_linfo->afh_map[0], pafh->afh_l, 4);
-		hal_mem_cpy(h, &bt_linfo->afh_map[4], pafh->afh_m, 4);
-		hal_mem_cpy(h, &bt_linfo->afh_map[8], pafh->afh_h, 2);
+		if (pafh->map_type & BTC_RPT_BT_AFH_LEGACY) {
+			hal_mem_cpy(h, &b->afh_map[0], pafh->afh_l, 4);
+			hal_mem_cpy(h, &b->afh_map[4], pafh->afh_m, 4);
+			hal_mem_cpy(h, &b->afh_map[8], pafh->afh_h, 2);
+			cx->cnt_bt[BTC_BCNT_AFH_UPDATE]++;
+			cx->cnt_bt[BTC_BCNT_AFH_CONFLICT] = 0;
+			dm->error &= ~BTC_DMERR_AFH_CONFLICT;
+
+			if (b->status.map.connect && wl->afh_info.en) {
+				for(i = 0; i < 12; i++) {
+					/* conflict channel map*/
+					xmap = b->afh_map[i] & wl->ch_map[i];
+					if (!xmap)
+						continue;
+
+					for (j = 0; j < 8; j++) {
+						if (!(xmap & BIT(j)))
+					    		continue;
+						cnt++;
+					}
+				}
+
+				cx->cnt_bt[BTC_BCNT_AFH_CONFLICT] = cnt;
+				if (cnt)
+					dm->error |= BTC_DMERR_AFH_CONFLICT;
+			}
+		}
+
+		if (pafh->map_type & BTC_RPT_BT_AFH_LE) {
+			hal_mem_cpy(h, &b->afh_map_le[0], pafh->afh_le_a, 4);
+			hal_mem_cpy(h, &b->afh_map_le[4], pafh->afh_le_b, 1);
+			cx->cnt_bt[BTC_BCNT_AFH_LE_UPDATE]++;
+			cx->cnt_bt[BTC_BCNT_AFH_LE_CONFLICT] = 0;
+			dm->error &= ~BTC_DMERR_AFH_LE_CONFLICT;
+
+			if (b->status.map.ble_connect && wl->afh_info.en) {
+				for(i = 0; i < 5; i++) {
+					/* conflict channel map*/
+					xmap = b->afh_map_le[i] &
+					       wl->ch_map_le[i];
+					if (!xmap)
+						continue;
+
+					for (j = 0; j < 8; j++) {
+						if (!(xmap & BIT(j)))
+					    		continue;
+						cnt_le++;
+					}
+				}
+
+				cx->cnt_bt[BTC_BCNT_AFH_LE_CONFLICT] = cnt_le;
+				if (cnt_le)
+					dm->error |= BTC_DMERR_AFH_LE_CONFLICT;
+			}
+		}
+
 		break;
 	case BTC_RPT_TYPE_BT_DEVICE:
 		a2dp->device_name = pdev->dev_name;
@@ -188,18 +331,23 @@ static void _update_bt_report(struct btc_t *btc, u8 rpt_type, u8* pfinfo)
 }
 
 static u32 _chk_btc_report(struct btc_t *btc, struct btf_fwinfo *pfwinfo,
-			u8 *prptbuf, u32 index)
+			   u8 *prptbuf, u32 index)
 {
 	struct btc_dm *dm = &btc->dm;
 	struct rtw_hal_com_t *hal = btc->hal;
 	struct btc_rpt_cmn_info *pcinfo = NULL;
-	struct btc_wl_info *wl = &btc->cx.wl;
-	struct btc_bt_info *bt = &btc->cx.bt;
+	struct btc_cx *cx = &btc->cx;
+	struct btc_wl_info *wl = &cx->wl;
+	struct btc_bt_info *bt = &cx->bt;
 	struct fbtc_rpt_ctrl *prpt = NULL;
 	struct fbtc_cysta *pcysta = NULL;
-	u8 rpt_type = 0, *rpt_content = NULL, *pfinfo = NULL;
-	u16 wl_slot_set = 0, polt_cnt = 0;
-	u32 rpt_len = 0, diff_t, bt_slot_real = 0;
+	struct fbtc_cynullsta *pcynull = NULL;
+	u8 rpt_type = 0;
+	u8 *rpt_content = NULL;
+	u8 *pfinfo = NULL;
+	u16 wl_slot_set = 0, wl_slot_real = 0;
+	u32 rpt_len = 0, diff = 0, bt_slot_set = 0, bt_slot_real = 0;
+	u32 cnt_leak_slot = 0, cnt_rx_imr = 0, val = 0, i = 0;
 
 	if (!prptbuf) {
 		pfwinfo->err[BTFRE_INVALID_INPUT]++;
@@ -246,6 +394,7 @@ static u32 _chk_btc_report(struct btc_t *btc, struct btf_fwinfo *pfwinfo,
 	case BTC_RPT_TYPE_NULLSTA:
 		pcinfo = &pfwinfo->rpt_fbtc_nullsta.cinfo;
 		pfinfo = (u8 *)(&pfwinfo->rpt_fbtc_nullsta.finfo);
+		pcynull = &pfwinfo->rpt_fbtc_nullsta.finfo;
 		pcinfo->req_len = sizeof(struct fbtc_cynullsta);
 		pcinfo->req_fver = FCX_NULLSTA_VER;
 		break;
@@ -319,101 +468,123 @@ static u32 _chk_btc_report(struct btc_t *btc, struct btf_fwinfo *pfwinfo,
 	hal_mem_cpy(hal, (void *)pfinfo, (void *)rpt_content, pcinfo->req_len);
 	pcinfo->valid = 1;
 
-	if (rpt_type == BTC_RPT_TYPE_TDMA) {
-#if BTC_CX_FW_OFFLOAD /* update tdma_now if fw offload for debug */
-		_tdma_cpy(&dm->tdma_now, &pfwinfo->rpt_fbtc_tdma.finfo.tdma);
-#else
+	switch (rpt_type) {
+	case BTC_RPT_TYPE_CTRL:
+		prpt = &pfwinfo->rpt_ctrl.finfo;
+		pfwinfo->rpt_en_map = prpt->rpt_info.en;
+		wl->ver_info.fw_coex = prpt->rpt_info.cx_ver;
+		wl->ver_info.fw = prpt->rpt_info.fw_ver;
+
+		val = sizeof(struct btc_gnt_ctrl);
+		for (i = HW_PHY_0; i < HW_PHY_MAX; i++)
+			hal_mem_cpy(hal, (void *)&dm->gnt_val[i],
+				    (void *)&prpt->gnt_val[i][0], val);
+
+		cx->cnt_bt[BTC_BCNT_HIPRI_TX] = prpt->bt_cnt[BTC_BCNT_HI_TX];
+		cx->cnt_bt[BTC_BCNT_HIPRI_RX] = prpt->bt_cnt[BTC_BCNT_HI_RX];
+		cx->cnt_bt[BTC_BCNT_LOPRI_TX] = prpt->bt_cnt[BTC_BCNT_LO_TX];
+		cx->cnt_bt[BTC_BCNT_LOPRI_RX] = prpt->bt_cnt[BTC_BCNT_LO_RX];
+		cx->cnt_bt[BTC_BCNT_POLUT] = prpt->bt_cnt[BTC_BCNT_POLLUTED];
+
+		val = pfwinfo->event[BTF_EVNT_RPT];
+		_chk_btc_err(btc, BTC_DCNT_BTCNT_HANG, 0);
+		_chk_btc_err(btc, BTC_DCNT_RPT_HANG, val);
+
+		if ((wl->ver_info.fw_coex & 0xffffff00) !=
+		     btc->chip->wlcx_desired) {
+			wl->fw_ver_mismatch = 1;
+			dm->error |= BTC_DMERR_WL_VER_MISMATCH;
+		} else {
+			wl->fw_ver_mismatch = 0;
+			dm->error &= ~BTC_DMERR_WL_VER_MISMATCH;
+		}
+
+		if (bt->rfk_info.map.timeout)
+			dm->error |= BTC_DMERR_BT_RFK_TIMEOUT;
+		else
+			dm->error &= ~BTC_DMERR_BT_RFK_TIMEOUT;
+		break;
+	case BTC_RPT_TYPE_TDMA:
 		_chk_btc_err(btc, BTC_DCNT_TDMA_NONSYNC,
 			     _tdma_cmp(&dm->tdma_now,
 				       &pfwinfo->rpt_fbtc_tdma.finfo.tdma));
-#endif
-	}
-
-	if (rpt_type == BTC_RPT_TYPE_SLOT) {
-#if BTC_CX_FW_OFFLOAD /* update slot_now if fw offload for debug */
-		_slots_cpy(dm->slot_now, pfwinfo->rpt_fbtc_slots.finfo.slot);
-#else
+		break;
+	case BTC_RPT_TYPE_SLOT:
 		_chk_btc_err(btc, BTC_DCNT_SLOT_NONSYNC,
 			     _tdma_cmp(dm->slot_now,
 				       pfwinfo->rpt_fbtc_slots.finfo.slot));
-#endif
-	}
-
-	if (rpt_type == BTC_RPT_TYPE_CYSTA &&
-	    pcysta->cycles >= BTC_CYSTA_CHK_PERIOD) {
+		break;
+	case BTC_RPT_TYPE_CYSTA:
+		if (dm->fddt_train == BTC_FDDT_ENABLE)
+			break;
+		cnt_leak_slot = pcysta->slot_cnt[CXST_LK];
+		cnt_rx_imr = pcysta->leak_slot.cnt_rximr;
 		/* Check Leak-AP */
-		if (pcysta->slot_cnt[CXST_LK] != 0 &&
-		    pcysta->leak_slot.cnt_rximr != 0 && dm->tdma_now.rxflctrl) {
-			if (pcysta->slot_cnt[CXST_LK] <
-			    BTC_LEAK_AP_TH * pcysta->leak_slot.cnt_rximr)
+		if (cnt_leak_slot != 0 && cnt_rx_imr != 0 &&
+		    dm->tdma_now.rxflctrl) {
+			if (pcysta->cycles >= BTC_CYSTA_CHK_PERIOD &&
+			    cnt_leak_slot < BTC_LEAK_AP_TH * cnt_rx_imr)
 				dm->leak_ap = 1;
 		}
 
 		/* Check diff time between real WL slot and W1 slot */
 		if (dm->tdma_now.type != CXTDMA_OFF) {
 			wl_slot_set = dm->slot_now[CXST_W1].dur;
+			wl_slot_real = pcysta->cycle_time.tavg[CXT_WL];
 
-			if (pcysta->cycle_time.tavg[CXT_WL] > wl_slot_set) {
-				diff_t = pcysta->cycle_time.tavg[CXT_WL] -
-					 wl_slot_set;
-				_chk_btc_err(btc, BTC_DCNT_WL_SLOT_DRIFT, diff_t);
-			}
+			if (wl_slot_real > wl_slot_set)
+				diff = wl_slot_real - wl_slot_set;
+			else
+				diff = wl_slot_set - wl_slot_real;
 		}
+
+		_chk_btc_err(btc, BTC_DCNT_WL_SLOT_DRIFT, diff);
 
 		/* Check diff time between real BT slot and EBT/E5G slot */
+		bt_slot_set = btc->bt_req_len[wl->pta_req_mac];
+		bt_slot_real = pcysta->cycle_time.tavg[CXT_BT];
+		diff = 0;
 		if (dm->tdma_now.type == CXTDMA_OFF &&
 		    dm->tdma_now.ext_ctrl == CXECTL_EXT &&
-		    btc->bt_req_len != 0) {
-			bt_slot_real = pcysta->cycle_time.tavg[CXT_BT];
+		    bt_slot_set != 0) {
 
-			if (btc->bt_req_len > bt_slot_real) {
-				diff_t = btc->bt_req_len - bt_slot_real;
-				_chk_btc_err(btc, BTC_DCNT_BT_SLOT_DRIFT, diff_t);
-			}
-
+			if (bt_slot_set > bt_slot_real)
+				diff = bt_slot_set - bt_slot_real;
+			else
+				diff = bt_slot_real - bt_slot_set;
 		}
 
-		_chk_btc_err(btc, BTC_DCNT_W1_FREEZE, pcysta->slot_cnt[CXST_W1]);
-		_chk_btc_err(btc, BTC_DCNT_B1_FREEZE, pcysta->slot_cnt[CXST_B1]);
-		_chk_btc_err(btc, BTC_DCNT_CYCLE_FREEZE, (u32)pcysta->cycles);
-	}
+		_chk_btc_err(btc, BTC_DCNT_BT_SLOT_DRIFT, diff);
+		_chk_btc_err(btc, BTC_DCNT_E2G_HANG,pcysta->slot_cnt[CXST_E2G]);
 
-	if (rpt_type == BTC_RPT_TYPE_CTRL) {
-		prpt = &pfwinfo->rpt_ctrl.finfo;
-		btc->fwinfo.rpt_en_map = prpt->rpt_info.en;
-		wl->ver_info.fw_coex = prpt->wl_fw_info.cx_ver;
-		wl->ver_info.fw = prpt->wl_fw_info.fw_ver;
-		dm->wl_fw_cx_offload = !!(prpt->wl_fw_info.cx_offload);
+		_chk_btc_err(btc, BTC_DCNT_W1_HANG, pcysta->slot_cnt[CXST_W1]);
+		_chk_btc_err(btc, BTC_DCNT_B1_HANG, pcysta->slot_cnt[CXST_B1]);
 
-		if (dm->wl_fw_cx_offload != BTC_CX_FW_OFFLOAD)
-			dm->error.map.offload_mismatch = true;
+		/* "BT_SLOT_FLOOD" error-check MUST before "CYCLE_HANG" */
+		_chk_btc_err(btc, BTC_DCNT_BT_SLOT_FLOOD, (u32)pcysta->cycles);
+		_chk_btc_err(btc, BTC_DCNT_CYCLE_HANG, (u32)pcysta->cycles);
+		break;
+	case BTC_RPT_TYPE_NULLSTA:
+		if (dm->fddt_train == BTC_FDDT_ENABLE)
+			break;
+		if (pcynull->result[CXNULL_STATE_1][CXNULL_TX] <
+		    BTC_NULLTX_CHK_PERIOD)
+			break;
+
+		if (pcynull->result[CXNULL_STATE_1][CXNULL_OK] <
+		    BTC_NULLTX_FAIL_TH *
+		    pcynull->result[CXNULL_STATE_1][CXNULL_LATE])
+			dm->error |= BTC_DMERR_NULL1_TX_LATE;
 		else
-			dm->error.map.offload_mismatch = false;
-
-		if (prpt->bt_rfk_cnt[BTC_BCNT_RFK_TIMEOUT] > 0)
-			bt->rfk_info.map.timeout = 1;
-		else
-			bt->rfk_info.map.timeout = 0;
-
-		dm->error.map.bt_rfk_timeout = bt->rfk_info.map.timeout;
-
-		_chk_btc_err(btc, BTC_DCNT_RPT_FREEZE,
-			     pfwinfo->event[BTF_EVNT_RPT]);
-
-		/* To avoid I/O if WL LPS or power-off  */
-		if (wl->status.map.lps != BTC_LPS_RF_OFF &&
-		    !wl->status.map.rf_off) {
-			btc->chip->ops->update_bt_cnt(btc);
-			_chk_btc_err(btc, BTC_DCNT_BTCNT_FREEZE, 0);
-			rtw_hal_mac_get_bt_polt_cnt(btc->hal, HW_PHY_0,
-						    &polt_cnt);
-			btc->cx.cnt_bt[BTC_BCNT_POLUT] = polt_cnt;
-		}
-	}
-
-	if (rpt_type >= BTC_RPT_TYPE_BT_VER &&
-	    rpt_type <= BTC_RPT_TYPE_BT_DEVICE)
+			dm->error &= ~BTC_DMERR_NULL1_TX_LATE;
+		break;
+	case BTC_RPT_TYPE_BT_VER:
+	case BTC_RPT_TYPE_BT_SCAN:
+	case BTC_RPT_TYPE_BT_AFH:
+	case BTC_RPT_TYPE_BT_DEVICE:
 		_update_bt_report(btc, rpt_type, pfinfo);
+		break;
+	}
 
 	return (rpt_len + BTC_RPT_HDR_SIZE);
 }
@@ -446,8 +617,8 @@ static void _append_tdma(struct btc_t *btc, bool force_exec)
 	u16 len = btc->policy_len;
 
 	if (!force_exec && !_tdma_cmp(&dm->tdma, &dm->tdma_now)) {
-		PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_, "[BTC], %s(): tdma no change!\n",
-			  __func__);
+		PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_,
+			  "[BTC], %s(): tdma no change!\n", __func__);
 		return;
 	}
 
@@ -458,13 +629,14 @@ static void _append_tdma(struct btc_t *btc, bool force_exec)
 	v->fver = FCX_TDMA_VER;
 
 	_tdma_cpy(&v->tdma, &dm->tdma);
-
 	btc->policy_len = len + 2 + sizeof(struct fbtc_1tdma);
 
-	PHL_INFO("[BTC], %s: type:%d, rxflctrl=%d, txflctrl=%d, wtgle_n=%d, leak_n=%d, ext_ctrl=%d, rxflctrl_role=0x%x\n",
-		 __func__, dm->tdma.type, dm->tdma.rxflctrl, dm->tdma.txflctrl,
-		 dm->tdma.wtgle_n, dm->tdma.leak_n, dm->tdma.ext_ctrl,
-		 dm->tdma.rxflctrl_role);
+	PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_,
+		  "[BTC], %s: type:%d, rxflctrl=%d, txflctrl=%d, rsvd=%d, "
+		  "leak_n=%d, ext_ctrl=%d, rxflctrl_role=0x%x, opt_ctrl=0x%x\n",
+		  __func__, dm->tdma.type, dm->tdma.rxflctrl, dm->tdma.txflctrl,
+		  dm->tdma.rsvd, dm->tdma.leak_n, dm->tdma.ext_ctrl,
+		  dm->tdma.rxflctrl_role, dm->tdma.option_ctrl);
 }
 
 static void _append_slot(struct btc_t *btc, bool force_exec)
@@ -490,15 +662,17 @@ static void _append_slot(struct btc_t *btc, bool force_exec)
 		v->sid = i;
 		_slot_cpy(&v->slot, &dm->slot[i]);
 
-		PHL_INFO("[BTC], %s: slot-%d: dur=%d, table=0x%08x, type=%d\n",
-			 __func__, i,dm->slot[i].dur, dm->slot[i].cxtbl,
-			 dm->slot[i].cxtype);
+		PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_,
+			  "[BTC], %s: slot-%d: dur=%d, table=0x%08x, type=%d\n",
+			  __func__, i,dm->slot[i].dur, dm->slot[i].cxtbl,
+			  dm->slot[i].cxtype);
 		cnt++;
 		btc->policy_len = len + 2 + sizeof(struct fbtc_1slot);
 	}
 
 	if (cnt > 0)
-		PHL_INFO("[BTC], %s: slot update (cnt=%d)!!\n", __func__, cnt);
+		PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_,
+			  "[BTC], %s: slot update (cnt=%d)!!\n", __func__, cnt);
 }
 
 /*
@@ -510,16 +684,22 @@ void hal_btc_fw_en_rpt(struct btc_t *btc, u32 rpt_map, u32 rpt_state)
 	struct btc_ops *ops = btc->ops;
 	struct btf_set_report r = {0};
 	struct btf_fwinfo* fwinfo = &btc->fwinfo;
+	struct btc_wl_smap *wl_smap = &btc->cx.wl.status.map;
 	u32 val = 0;
-	u8 en;
 
-	if (!ops || !ops->fw_cmd)
+	if (!ops || !ops->fw_cmd || rpt_state > 2)
 		return;
 
-	en = rpt_state & 0x1;
-	if (en)
+	/* Skip enable report if enter IPS/LPS/RF-Off  */
+	if ((wl_smap->rf_off || wl_smap->lps != BTC_LPS_OFF) &&
+	     rpt_state != 0)
+	     return;
+
+	if (rpt_state == 2) /* for multi-bit operation */
+		val = rpt_map;
+	else if (rpt_state == 1)
 		val = fwinfo->rpt_en_map | rpt_map;
-	else
+	else if (rpt_state == 0)
 		val = fwinfo->rpt_en_map & (~rpt_map);
 
 	if (val == fwinfo->rpt_en_map)
@@ -528,15 +708,13 @@ void hal_btc_fw_en_rpt(struct btc_t *btc, u32 rpt_map, u32 rpt_state)
 	fwinfo->rpt_en_map = val;
 
 	r.fver = FCX_BTCRPT_VER;
-	r.enable = val;
-	r.para = en;
-
+	r.enable = val; /* To indicate which fw report is enabled */
+	r.para = 1; /* no used */
 	ops->fw_cmd(btc, BTFC_SET, SET_REPORT_EN, (u8 *)&r, sizeof(r));
 }
 
 void hal_btc_fw_set_slots(struct btc_t *btc, u8 num, struct fbtc_slot *s)
 {
-#if !BTC_CX_FW_OFFLOAD
 	struct rtw_hal_com_t *h = btc->hal;
 	struct btc_ops *ops = btc->ops;
 	struct btf_set_slot_table *tbl = NULL;
@@ -555,10 +733,8 @@ void hal_btc_fw_set_slots(struct btc_t *btc, u8 num, struct fbtc_slot *s)
 	tbl->tbl_num = num;
 	ptr = &tbl->buf[0];
 	hal_mem_cpy(h, (void*)ptr, s, num * sizeof(struct fbtc_slot));
-
 	ops->fw_cmd(btc, BTFC_SET, SET_SLOT_TABLE, (u8*)tbl, n);
 	hal_mem_free(h, (void*)tbl, n);
-#endif
 }
 
 /* set RPT_EN_MREG = 0 to stop 2s monitor timer in WL FW,
@@ -570,7 +746,8 @@ void hal_btc_fw_set_monreg(struct btc_t *btc)
 	struct rtw_hal_com_t *h = btc->hal;
 	struct btc_ops *ops = btc->ops;
 	struct btf_set_mon_reg *monreg = NULL;
-	u8 n, *ptr = NULL, ulen;
+	u8 n, ulen;
+	u8 *ptr = NULL;
 	u16 sz = 0;
 
 	if (!ops || !ops->fw_cmd)
@@ -579,8 +756,8 @@ void hal_btc_fw_set_monreg(struct btc_t *btc)
 	n = btc->chip->mon_reg_num;
 
 	if (n > CXMREG_MAX) {
-		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_, "[BTC], mon reg count %d > %d\n",
-			  n, CXMREG_MAX);
+		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_,
+			  "[BTC], mon reg count %d > %d\n", n, CXMREG_MAX);
 		return;
 	}
 
@@ -605,11 +782,13 @@ bool hal_btc_fw_set_1tdma(struct btc_t *btc, u16 len, u8 *buf)
 	struct btc_dm *dm = &btc->dm;
 
 	if (len != sizeof(struct fbtc_tdma)) {
-		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_, "[BTC], %s(): return because len != %d\n",
-			 __func__, (int)sizeof(struct fbtc_tdma));
+		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_,
+			  "[BTC], %s(): return because len != %d\n",
+			  __func__, (int)sizeof(struct fbtc_tdma));
 		return false;
 	} else if (buf[0] >= CXTDMA_MAX) {
-		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_, "[BTC], %s(): return because tdma_type >= %d\n",
+		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_,
+			  "[BTC], %s(): return because tdma_type >= %d\n",
 			 __func__, CXTDMA_MAX);
 		return false;
 	}
@@ -623,12 +802,14 @@ bool hal_btc_fw_set_1slot(struct btc_t *btc, u16 len, u8 *buf)
 	struct btc_dm *dm = &btc->dm;
 
 	if (len != sizeof(struct fbtc_slot) + 1) {
-		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_, "[BTC], %s(): return because len != %d\n",
-			 __func__, (int)sizeof(struct fbtc_slot) + 1);
+		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_,
+			  "[BTC], %s(): return because len != %d\n",
+			  __func__, (int)sizeof(struct fbtc_slot) + 1);
 		return false;
 	} else if (buf[0] >= CXST_MAX) {
-		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_, "[BTC], %s(): return because slot_id >= %d\n",
-			 __func__, CXST_MAX);
+		PHL_TRACE(COMP_PHL_BTC, _PHL_ERR_,
+			  "[BTC], %s(): return because slot_id >= %d\n",
+			  __func__, CXST_MAX);
 		return false;
 	}
 
@@ -641,25 +822,26 @@ bool hal_btc_fw_set_policy(struct btc_t *btc, bool force_exec, u16 policy_type,
 {
 	struct btc_dm *dm = &btc->dm;
 	struct btc_ops *ops = btc->ops;
+	u32 len = _os_strlen((u8 *)action);
 
 	if (!ops || !ops->fw_cmd)
 		return false;
 
-	_act_cpy(dm->run_action, (char*)action);
+	_act_cpy(dm->run_action, (char*)action, len);
 	_update_dm_step(btc, action);
 	_update_dm_step(btc, id_to_str(BTC_STR_POLICY, (u32)policy_type));
 
 	btc->policy_len = 0; /* clear length before append */
 	btc->policy_type = policy_type;
-
 	_append_tdma(btc, force_exec);
 	_append_slot(btc, force_exec);
 
 	if (btc->policy_len == 0 || btc->policy_len > BTC_POLICY_MAXLEN)
 		return false;
 
-	PHL_INFO("[BTC], %s(): action=%s -> policy type/len: 0x%04x/%d\n",
-		 __func__, action, policy_type, btc->policy_len);
+	PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_,
+		  "[BTC], %s(): action=%s -> policy type/len: 0x%04x/%d\n",
+		  __func__, action, policy_type, btc->policy_len);
 
 	if (dm->tdma.rxflctrl == CXFLC_NULLP)
 		btc->hal->btc_ctrl.lps = 1;
@@ -718,6 +900,7 @@ void hal_btc_fw_set_drv_info(struct btc_t *btc, u8 type)
 	struct btc_wl_info *wl = &btc->cx.wl;
 	struct btc_dm *dm = &btc->dm;
 	struct btc_ops *ops = btc->ops;
+	struct btc_rf_trx_para rf_para = dm->rf_trx_para;
 	u8 buf[256] = {0};
 	u8 sz = 0, n = 0;
 
@@ -758,6 +941,48 @@ void hal_btc_fw_set_drv_info(struct btc_t *btc, u8 type)
 		buf[1] = n;
 		hal_mem_cpy(h, (void *)&buf[2], &btc->ctrl, n);
 		break;
+	case CXDRVINFO_TRX:
+		n = sizeof(dm->trx_info);
+		sz = n + 2;
+
+		if (sz > sizeof(buf))
+			return;
+
+		buf[0] = CXDRVINFO_TRX;
+		buf[1] = n;
+
+		dm->trx_info.tx_power = rf_para.wl_tx_power & 0xff;
+		dm->trx_info.rx_gain = rf_para.wl_rx_gain & 0xff;
+		dm->trx_info.bt_tx_power = rf_para.bt_tx_power & 0xff;
+		dm->trx_info.bt_rx_gain = rf_para.bt_rx_gain & 0xff;
+		dm->trx_info.cn = wl->cn_report;
+		dm->trx_info.nhm = wl->nhm.pwr;
+
+		hal_mem_cpy(h, (void *)&buf[2], &dm->trx_info, n);
+		break;
+	case CXDRVINFO_TXPWR:
+		n = sizeof(u8);
+		sz = n + 2;
+
+		if (sz > sizeof(buf))
+			return;
+
+		buf[0] = CXDRVINFO_TXPWR;
+		buf[1] = n;
+		buf[2] = (u8)(dm->rf_trx_para.wl_tx_power & 0xff);
+		break;
+	case CXDRVINFO_FDDT:
+		n = sizeof(dm->fddt_info.train);
+		sz = n + 2;
+
+		if (sz > sizeof(buf))
+			return;
+
+		buf[0] = CXDRVINFO_FDDT;
+		buf[1] = n;
+		hal_mem_cpy(h, (void *)&buf[2], &dm->fddt_info.train, n);
+		break;
+#if 0
 	case CXDRVINFO_RFK:
 		n = sizeof(wl->rfk_info);
 		sz = n + 2;
@@ -769,7 +994,6 @@ void hal_btc_fw_set_drv_info(struct btc_t *btc, u8 type)
 		buf[1] = n;
 		hal_mem_cpy(h, (void *)&buf[2], &wl->rfk_info, n);
 		break;
-#if BTC_CX_FW_OFFLOAD
 	case CXDRVINFO_DBCC:
 		n = sizeof(wl->dbcc_info);
 		sz = n + 2;
@@ -837,11 +1061,10 @@ void hal_btc_fw_set_bt(struct btc_t *btc, u8 type, u16 len, u8* buf)
 	struct btc_ops *ops = btc->ops;
 
 	if (!ops || !ops->fw_cmd ||
-	    (type < SET_BT_WREG_ADDR || type > SET_BT_GOLDEN_RX_RANGE))
+	    (type < SET_BT_WREG_ADDR || type >= SET_MAX1))
 		return;
 
 	PHL_TRACE(COMP_PHL_BTC, _PHL_DEBUG_, "[BTC], %s()\n", __func__);
-
 	ops->fw_cmd(btc, BTFC_SET, type, buf, len);
 }
 

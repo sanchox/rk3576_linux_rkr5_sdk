@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2019 Realtek Corporation.
+ * Copyright(c) 2007 - 2021 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -14,18 +14,6 @@
  *****************************************************************************/
 #ifndef _RTW_XMIT_H_
 #define _RTW_XMIT_H_
-
-#if defined(CONFIG_SDIO_HCI) || defined(CONFIG_GSPI_HCI)
-	#ifdef CONFIG_TX_AGGREGATION
-		/* #define SDIO_TX_AGG_MAX	5 */
-	#else
-		#define SDIO_TX_AGG_MAX	1
-	#endif
-
-	#if defined CONFIG_SDIO_HCI
-		#define SDIO_TX_DIV_NUM (2)
-	#endif
-#endif
 
 #if 0 /*CONFIG_CORE_XMITBUF*/
 #ifdef CONFIG_PCI_HCI
@@ -63,7 +51,9 @@
 
 
 #ifdef RTW_PHL_TX
+#ifndef RTW_MAX_FRAG_NUM
 #define RTW_MAX_FRAG_NUM 10 //max scatter number of a packet to xmit
+#endif /*RTW_MAX_FRAG_NUM*/
 #define RTW_MAX_WL_HEAD	100
 #define RTW_MAX_WL_TAIL 100
 #define RTW_SZ_LLC	(SNAP_SIZE + sizeof(u16))
@@ -141,11 +131,6 @@
 
 #ifdef CONFIG_TX_EARLY_MODE
 	#define EARLY_MODE_INFO_SIZE	8
-#endif
-
-
-#if defined(CONFIG_SDIO_HCI) || defined(CONFIG_GSPI_HCI)
-	#define TXDESC_OFFSET TXDESC_SIZE
 #endif
 
 #ifdef CONFIG_USB_HCI
@@ -409,7 +394,7 @@ struct pkt_attrib {
 	u8	amsdu_ampdu_en;/* tx amsdu in ampdu enable */
 	u8	pctrl;/* per packet txdesc control enable */
 	u8	triggered;/* for ap mode handling Power Saving sta */
-	u8	qsel;
+	/*u8	qsel;*/
 	u8	order;/* order bit */
 	u8	rate;
 	u8	intel_proxim;
@@ -417,11 +402,10 @@ struct pkt_attrib {
 	u8   mbssid;
 	u8	ldpc;
 	u8	stbc;
-#ifdef CONFIG_WMMPS_STA
-	u8	trigger_frame;
-#endif /* CONFIG_WMMPS_STA */
 
 	struct sta_info *psta;
+
+	struct _ADAPTER_LINK *adapter_link;
 
 	u8 rtsen;
 	u8 cts2self;
@@ -520,9 +504,6 @@ struct pkt_attrib {
 	u8   mbssid;
 	u8	ldpc;
 	u8	stbc;
-#ifdef CONFIG_WMMPS_STA
-	u8	trigger_frame;
-#endif /* CONFIG_WMMPS_STA */
 
 	struct sta_info *psta;
 
@@ -734,11 +715,6 @@ struct xmit_frame {
 	struct xmit_buf *pxmitbuf;
 	#endif
 
-#if defined(CONFIG_SDIO_HCI) || defined(CONFIG_GSPI_HCI)
-	u8	pg_num;
-	u8	agg_num;
-#endif
-
 #ifdef CONFIG_USB_HCI
 #ifdef CONFIG_USB_TX_AGGREGATION
 	u8	agg_num;
@@ -901,6 +877,12 @@ struct	xmit_priv	{
 	int viq_cnt;
 	int voq_cnt;
 
+#ifdef PRIVATE_R
+	u64 tx_be_drop_cnt;
+	u64 tx_bk_drop_cnt;
+	u64 tx_vi_drop_cnt;
+	u64 tx_vo_drop_cnt;
+#endif
 #endif
 
 #ifdef CONFIG_PCI_HCI
@@ -914,10 +896,6 @@ struct	xmit_priv	{
 #if defined(CONFIG_SDIO_HCI) || defined(CONFIG_GSPI_HCI)
 #ifdef CONFIG_TX_AMSDU_SW_MODE
 	_tasklet xmit_tasklet;
-#endif
-#ifndef CONFIG_SDIO_TX_TASKLET
-	_thread_hdl_	SdioXmitThread;
-	_sema		SdioXmitSema;
 #endif
 #endif /* CONFIG_SDIO_HCI */
 
@@ -952,7 +930,10 @@ struct	xmit_priv	{
 	int	ack_tx;
 	_mutex ack_tx_mutex;
 	struct submit_ctx ack_tx_ops;
-	u8 seq_no;
+	u8 ack_tx_seq_no;
+	#ifdef CONFIG_XMIT_ACK_BY_REL_RPT
+	struct rtw_txfb_t ack_txfb;
+	#endif
 #endif
 
 #ifdef CONFIG_TX_AMSDU
@@ -1043,7 +1024,7 @@ extern s32 rtw_mgmt_xmitframe_coalesce(_adapter *padapter,
 #ifdef CONFIG_TDLS
 extern struct tdls_txmgmt *ptxmgmt;
 s32 rtw_xmit_tdls_coalesce(_adapter *padapter, struct xmit_frame *pxmitframe, struct tdls_txmgmt *ptxmgmt);
-s32 update_tdls_attrib(_adapter *padapter, struct pkt_attrib *pattrib);
+s32 update_tdls_attrib(_adapter *padapter, struct _ADAPTER_LINK *padapter_link, struct pkt_attrib *pattrib);
 #endif
 s32 _rtw_init_hw_txqueue(struct hw_txqueue *phw_txqueue, u8 ac_tag);
 void _rtw_init_sta_xmit_priv(struct sta_xmit_priv *psta_xmitpriv);
@@ -1086,6 +1067,11 @@ s32 core_tx_per_packet(_adapter *padapter, struct xmit_frame *pxframe,
 s32 rtw_core_tx(_adapter *padapter, struct sk_buff **ppkt, struct sta_info *psta, u16 os_qid);
 enum rtw_phl_status rtw_core_tx_recycle(void *drv_priv, struct rtw_xmit_req *txreq);
 s32 core_tx_alloc_xmitframe(_adapter *padapter, struct xmit_frame **pxmitframe, u16 os_qid);
+#ifdef CONFIG_PCI_HCI
+struct tx_local_buf;
+void rtw_os_query_local_buf(void *priv, struct tx_local_buf *buf);
+void rtw_os_return_local_buf(void *priv, struct tx_local_buf *buf);
+#endif
 #ifdef CONFIG_CORE_TXSC
 void core_recycle_txreq_phyaddr(_adapter *padapter, struct rtw_xmit_req *txreq);
 s32 core_tx_free_xmitframe(_adapter *padapter, struct xmit_frame *pxframe);
@@ -1102,7 +1088,7 @@ void rtw_update_tx_rate_bmp(struct dvobj_priv *dvobj);
 u8 rtw_get_tx_bw_bmp_of_ht_rate(struct dvobj_priv *dvobj, u8 rate, u8 max_bw);
 u8 rtw_get_tx_bw_bmp_of_vht_rate(struct dvobj_priv *dvobj, u8 rate, u8 max_bw);
 s16 rtw_rfctl_get_oper_txpwr_max_mbm(struct rf_ctl_t *rfctl, u8 ch, u8 bw, u8 offset, u8 ifbmp_mod, u8 if_op, bool eirp);
-s16 rtw_rfctl_get_reg_max_txpwr_mbm(struct rf_ctl_t *rfctl, u8 ch, u8 bw, u8 offset, bool eirp);
+s16 rtw_rfctl_get_reg_max_txpwr_mbm(struct rf_ctl_t *rfctl, enum band_type band, u8 ch, u8 bw, u8 offset, bool eirp);
 
 u8 query_ra_short_GI(struct sta_info *psta, u8 bw);
 
@@ -1150,6 +1136,11 @@ void rtw_tx_poll_timer_cancel(_adapter *padapter);
 #ifdef CONFIG_XMIT_ACK
 int rtw_ack_tx_wait(struct xmit_priv *pxmitpriv, u32 timeout_ms);
 void rtw_ack_tx_done(struct xmit_priv *pxmitpriv, int status);
+
+#ifdef CONFIG_XMIT_ACK_BY_REL_RPT
+void rtw_ack_txfb_init(_adapter *padapter, struct rtw_txfb_t *txfb);
+#endif
+
 #endif /* CONFIG_XMIT_ACK */
 
 enum XMIT_BLOCK_REASON {
