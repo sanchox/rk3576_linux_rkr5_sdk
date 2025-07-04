@@ -64,8 +64,8 @@ echo "nameserver 119.29.29.29" >> /etc/resolv.conf
 echo "nameserver 223.5.5.5" >> /etc/resolv.conf
 echo "nameserver 180.76.76.76" >> /etc/resolv.conf
 
-echo "deb http://mirrors.ustc.edu.cn/debian/ bookworm-backports main contrib" >> /etc/apt/sources.list
-echo "deb-src http://mirrors.ustc.edu.cn/debian/ bookworm-backports main contrib" >> /etc/apt/sources.list
+echo "deb http://ftp2.de.debian.org/debian/ bookworm-backports main contrib" >> /etc/apt/sources.list
+echo "deb-src http://ftp2.de.debian.org/debian/ bookworm-backports main contrib" >> /etc/apt/sources.list
 
 apt-get update
 apt-get upgrade -y

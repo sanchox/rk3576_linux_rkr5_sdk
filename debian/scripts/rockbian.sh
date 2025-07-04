@@ -40,5 +40,5 @@ if [ ! -d $WORK_DIR ]; then
 fi
 
 ./scripts/unmount.sh
-sudo TOP_DIR=$(realpath $DEBIAN_DIR/..) MIRROR=${MIRROR:-"http://mirrors.ustc.edu.cn/debian/"} ARCH=${ARCH:-armhf} $WORK_DIR/build.sh -c $SCRIPTS_DIR/config
+sudo TOP_DIR=$(realpath $DEBIAN_DIR/..) MIRROR=${MIRROR:-"http://ftp2.de.debian.org/debian/"} ARCH=${ARCH:-armhf} $WORK_DIR/build.sh -c $SCRIPTS_DIR/config
 ./scripts/unmount.sh

@@ -59,7 +59,7 @@ endchoice # rootfs arch
 
 config RK_DEBIAN_MIRROR
 	string "mirror source for APT"
-	default "mirrors.ustc.edu.cn"
+	default "ftp2.de.debian.org"
 
 endif # Debian
 endmenuconfig # Debian
