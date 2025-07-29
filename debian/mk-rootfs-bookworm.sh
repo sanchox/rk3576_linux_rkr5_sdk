@@ -193,6 +193,12 @@ find /usr/lib/systemd/ -name "wireplumber*.service" | xargs sed -i "/Environment
 \${APT_INSTALL} /packages/weston/*.deb
 \${APT_INSTALL} /packages/wayland/*.deb
 
+#--------------------neko-packages-------------
+echo -e "\033[36m Install neko packages.................... \033[0m"
+\${APT_INSTALL} python3-pip python3-dev build-essential portaudio19-dev
+\${APT_INSTALL} python3-spidev python3-numpy python3-psutil python3-cffi python3-cffi-backend python3-ply python3-pycparser
+pip3 install --break-system-packages sounddevice
+
 # HACK debian11.3 to fix bug
 #\${APT_INSTALL} fontconfig --reinstall
 
