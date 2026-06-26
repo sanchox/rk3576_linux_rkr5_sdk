@@ -1,0 +1,115 @@
+# Build the RK3576 image on ephemeral DigitalOcean droplets via ci/do/deploy.sh.
+# Secrets: DIGITALOCEAN_ACCESS_TOKEN (Droplet + Block Storage scopes),
+#          NEKO_DO_SSH_KEY, DO_SPACES_ACCESS_KEY, DO_SPACES_SECRET_KEY
+
+name: Build device image (RK3576)
+
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: 'Board defconfig'
+        default: 'rockchip_rk3576_armsom_sige5_defconfig'
+      git_ref:
+        description: 'SDK git ref to build (default: triggering commit)'
+        default: ''
+  push:
+    tags:
+      - 'image_*'
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      # only the ci/do/ scripts are needed on the runner
+      - name: Checkout orchestration scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: ci/do
+          fetch-depth: 1
+          lfs: false
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Set up SSH key for the droplet
+        env:
+          NEKO_DO_SSH_KEY: ${{ secrets.NEKO_DO_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$NEKO_DO_SSH_KEY" > ~/.ssh/id_ed25519_neko_do
+          chmod 600 ~/.ssh/id_ed25519_neko_do
+          ssh-keygen -y -f ~/.ssh/id_ed25519_neko_do > ~/.ssh/id_ed25519_neko_do.pub
+
+      - name: Compute artifact prefix
+        id: prefix
+        run: |
+          ref_name='${{ github.event.inputs.git_ref || github.ref_name }}'
+          # sanitise ref for an S3 key (no leading refs/, no slashes elsewhere)
+          ref_safe="${ref_name#refs/heads/}"; ref_safe="${ref_safe#refs/tags/}"
+          ref_safe="${ref_safe//\//-}"
+          prefix="rk3576/${ref_safe}/${GITHUB_SHA::7}"
+          echo "value=$prefix" >> "$GITHUB_OUTPUT"
+          echo "Artifact prefix: $prefix"
+
+      - name: Build image on ephemeral DO droplet
+        env:
+          DO_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          REGION: ${{ vars.DO_REGION }}
+          SPACES_BUCKET: ${{ vars.SPACES_BUCKET }}
+          GIT_REPO: ${{ github.server_url }}/${{ github.repository }}.git
+          GIT_REF: ${{ github.event.inputs.git_ref || github.sha }}
+          DEFCONFIG: ${{ github.event.inputs.defconfig || 'rockchip_rk3576_armsom_sige5_defconfig' }}
+          SPACES_PREFIX: ${{ steps.prefix.outputs.value }}
+          DO_SPACES_ACCESS_KEY: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+          DO_SPACES_SECRET_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+        run: |
+          chmod +x ci/do/*.sh
+          ci/do/deploy.sh all
+
+      # always clean up a leftover droplet, even on failure (volume is kept)
+      - name: Clean up droplet
+        if: always()
+        env:
+          DO_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: ci/do/deploy.sh clean || true
+
+      - name: Presigned download link
+        if: success()
+        env:
+          DO_SPACES_ACCESS_KEY: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+          DO_SPACES_SECRET_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+          SPACES_REGION: ${{ vars.DO_REGION }}
+          SPACES_BUCKET: ${{ vars.SPACES_BUCKET }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends s3cmd
+          cat > ~/.s3cfg <<EOF
+          [default]
+          access_key = ${DO_SPACES_ACCESS_KEY}
+          secret_key = ${DO_SPACES_SECRET_KEY}
+          host_base = ${SPACES_REGION}.digitaloceanspaces.com
+          host_bucket = %(bucket)s.${SPACES_REGION}.digitaloceanspaces.com
+          use_https = True
+          EOF
+          prefix='${{ steps.prefix.outputs.value }}'
+          expires_at=$(( $(date +%s) + 604800 ))
+          # the zip is named update-<date>-<sha>.zip on the droplet — find it
+          key=$(s3cmd ls "s3://${SPACES_BUCKET}/${prefix}/" | awk '$NF ~ /update-.*\.zip$/ {print $NF}' | sort | tail -1)
+          name=$(basename "$key")
+          url=$(s3cmd signurl "$key" "${expires_at}")
+          {
+            echo "## RK3576 image"
+            echo
+            echo "Stored at \`s3://${SPACES_BUCKET}/${prefix}/\` (DO Spaces, ${SPACES_REGION})."
+            echo
+            echo "Presigned download (valid 7 days):"
+            echo
+            echo "- [\`${name}\`](${url})"
+          } >> "$GITHUB_STEP_SUMMARY"
