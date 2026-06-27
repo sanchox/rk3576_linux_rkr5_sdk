@@ -1,0 +1,42 @@
+#cloud-config
+# Droplet bootstrap for Docker-based builds: docker, git-lfs, s3cmd, arm64
+# binfmt and swap. The build toolchain lives in the Docker image (see Dockerfile).
+# Writes /var/lib/neko-build-ready when done.
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - docker.io
+  - git
+  - git-lfs
+  - s3cmd
+  - rsync
+  - zip
+
+write_files:
+  - path: /usr/local/sbin/neko-build-bootstrap.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash -e
+      log() { echo "[neko-bootstrap] $*"; }
+
+      # --- swap ---
+      if [ ! -f /swapfile ]; then
+        log "creating 16G swapfile"
+        fallocate -l 16G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=16384
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo "/swapfile none swap sw 0 0" >> /etc/fstab
+      fi
+
+      # --- docker (arm64 binfmt is registered per-build in build-on-vm.sh) ---
+      systemctl enable --now docker
+      git lfs install --system || true
+
+      log "bootstrap finished"
+      date > /var/lib/neko-build-ready
+
+runcmd:
+  - bash /usr/local/sbin/neko-build-bootstrap.sh 2>&1 | tee /var/log/neko-bootstrap.log
